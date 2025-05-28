@@ -12,13 +12,11 @@ from gradient_mechanics.data import transforms
 import torch
 from torch.utils.data._utils import collate
 
-
 def packet_from_buffer(buffer: torch.ByteTensor) -> nvc.PacketData:
     packet = nvc.PacketData()
     packet.bsl_data = buffer.data_ptr()
     packet.bsl = buffer.numel()
     return packet
-
 
 def buffer_from_packet(packet: nvc.PacketData) -> torch.ByteTensor:
     numpy_byte_array = np.ctypeslib.as_array(
@@ -27,6 +25,17 @@ def buffer_from_packet(packet: nvc.PacketData) -> torch.ByteTensor:
     )
     return torch.from_numpy(numpy_byte_array.copy())
 
+def _get_tensor_hwc(height: int, width: int, device: int):
+    return cvcuda.as_tensor(
+        torch.zeros((1, height, width, 3), dtype=torch.uint8, device=f"cuda:{device}"),
+        layout="NHWC",
+    )
+
+def _get_tensor_hwc_y8(height: int, width: int, device: int):
+    return cvcuda.as_tensor(
+        torch.zeros((1, height, width, 1), dtype=torch.uint8, device=f"cuda:{device}"),
+        layout="NHWC",
+    )
 
 class PacketBuffersBatch(typing.NamedTuple):
     """Batch of PacketBuffers."""
@@ -54,15 +63,6 @@ class PacketBuffers(typing.NamedTuple):
 
 collate.default_collate_fn_map[PacketBuffers] = PacketBuffers.collate
 
-
-def _to_rgb_tensor(nvcv_image: cvcuda.Image):
-    nvcv_tensor: cvcuda.Tensor = cvcuda.as_tensor(nvcv_image)
-    nvcv_nhwc = cvcuda.reformat(nvcv_tensor, "NHWC")
-    nvcv_nhwc_rgb = cvcuda.cvtcolor(nvcv_nhwc, cvcuda.ColorConversion.YUV2RGB_NV12)
-
-    return nvcv_nhwc_rgb
-
-
 class Codec(enum.Enum):
     """Codec for video decoding."""
 
@@ -83,7 +83,24 @@ class DecodeVideo(transforms.Transform):
             cudastream=0,
             usedevicememory=True,
         )
+        self.height = 720
+        self.width = 1280
 
+    def to_rgb_tensor(self, nvcv_image: cvcuda.Image):
+        nvcv_tensor: cvcuda.Tensor = cvcuda.as_tensor(nvcv_image)
+        nvcv_hwc = _get_tensor_hwc_y8(
+           nvcv_tensor.shape[2], nvcv_tensor.shape[3], self.device_id
+        )
+        nvcv_rgb = _get_tensor_hwc(self.height, self.width, self.device_id)
+        cvcuda.reformat_into(nvcv_hwc, nvcv_tensor)    
+        cvcuda.advcvtcolor_into(
+            nvcv_rgb,
+            nvcv_hwc,
+            cvcuda.ColorConversion.YUV2RGB_NV12,
+            cvcuda.ColorSpec.BT601,
+        )
+    
+        return nvcv_rgb
     def transform(self, batch: List[PacketBuffersBatch]) -> List[cvcuda.Tensor]:
         decoded_batches: list[cvcuda.Tensor] = []
         for item in batch:
@@ -127,8 +144,8 @@ class DecodeVideo(transforms.Transform):
             for frame in decoded:
                 frame_id = episode_packet_buffer.packet_frames[frame_packet_offset]
                 if frame_id in target_frame_id_to_tensor:
-                    nvcv_image: cvcuda.Image = cvcuda.as_image(frame, cvcuda.Format.Y8)
-                    torch_tensor = _to_rgb_tensor(nvcv_image)
+                    nvcv_image: cvcuda.Image = cvcuda.as_image(frame.nvcv_image(), cvcuda.Format.Y8)
+                    torch_tensor = self.to_rgb_tensor(nvcv_image)
                     target_frame_id_to_tensor[frame_id] = torch_tensor
                 frame_packet_offset += 1
 
@@ -144,9 +161,9 @@ class DecodeVideo(transforms.Transform):
                     frame_id = episode_packet_buffer.packet_frames[frame_packet_offset]
                     if frame_id in target_frame_id_to_tensor:
                         nvcv_image: cvcuda.Image = cvcuda.as_image(
-                            frame, cvcuda.Format.Y8
+                            frame.nvcv_image(), cvcuda.Format.Y8
                         )
-                        torch_tensor = _to_rgb_tensor(nvcv_image)
+                        torch_tensor = self.to_rgb_tensor(nvcv_image)
                         target_frame_id_to_tensor[frame_id] = torch_tensor
                     frame_packet_offset += 1
 
