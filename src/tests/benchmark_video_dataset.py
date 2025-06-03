@@ -6,7 +6,7 @@ from gradient_mechanics.data import torch_loading, torchdata_loading
 from gradient_mechanics.data import transforms
 from gradient_mechanics.data import video_transforms
 from tests import video_dataset
-
+import pdb
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -20,11 +20,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--codec",
         type=lambda codec: video_transforms.Codec[codec],
-        default="H264",
+        default="HEVC",
         choices=list(video_transforms.Codec),
     )
     parser.add_argument("--shuffle", action="store_true")
-    parser.add_argument("--episode-length", type=int, default=8)
+    parser.add_argument("--episode-length", type=int, default=1)
     parser.add_argument("--episode-stride", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=2)

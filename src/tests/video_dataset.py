@@ -3,10 +3,9 @@ import os
 
 import torch
 
-from gradient_mechanics.data import episodes, video_indexing
+from gradient_mechanics.data import episodes
 from gradient_mechanics.data import video_demuxing
 from gradient_mechanics.data import video_transforms
-
 
 logger = logging.getLogger(__name__)
 
@@ -37,19 +36,8 @@ class VideoDataset(torch.utils.data.Dataset):
             return
 
         index_file_path = self.video_file_path + self._INDEX_EXTENSION
-        if not os.path.exists(index_file_path):
-            logger.info(
-                f"Index file {index_file_path} does not exist, generating index"
-            )
-            video_index = video_indexing.VideoIndex.generate(self.video_file_path)
-            video_index.save(index_file_path)
-        else:
-            logger.info(f"Index file {index_file_path} exists, loading index")
-            video_index = video_indexing.VideoIndex.load(index_file_path)
 
-        self._indexing_demuxer = video_demuxing.IndexingDemuxer(
-            self.video_file_path, video_index
-        )
+        self._indexing_demuxer = video_demuxing.IndexingDemuxer(self.video_file_path)
         self._sample_index_generator = episodes.EpisodeGenerator(
             sample_count=len(self._indexing_demuxer),
             episode_length=self._episode_length,
@@ -67,8 +55,8 @@ class VideoDataset(torch.utils.data.Dataset):
         self._lazy_init()
 
         indices = self._sample_index_generator.episode_samples_indices(idx)
-        episode_buffers = self._indexing_demuxer.packet_buffers_for_frame_indices(
-            indices
+        episode_buffers = self._indexing_demuxer.packet_buffers_for_frame_idx(
+            indices[0]
         )
 
         return episode_buffers
