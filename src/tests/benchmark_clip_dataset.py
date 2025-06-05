@@ -3,14 +3,15 @@ import json
 import logging
 import os
 import time
+import random
 
 from torch.utils.data import Sampler
 from gradient_mechanics.data import torch_loading, torchdata_loading
 from gradient_mechanics.data import transforms
 from gradient_mechanics.data import video_transforms
-from tests import streaming_clip_dataset
+from tests import clip_dataset
 
-class VideoClipSampler(Sampler):
+class StreamingVideoClipSampler(Sampler):
     def __init__(self, index_frame, group_num):
         self.index_frame = index_frame
         self.group_num = group_num
@@ -44,13 +45,50 @@ class VideoClipSampler(Sampler):
         #Return total number of batches
         return self.group_size
 
+class RandomAccessVideoClipSampler(Sampler):
+    def __init__(self, index_frame, group_num):
+        self.index_frame = index_frame
+        self.group_num = group_num
+        self.clip_ids = list(index_frame.keys())
+        self._generate_groups()
+
+    def _generate_groups(self):
+        """divide the clip index into groups"""
+        self.groups_lst = []
+        for video_dir ,clip_info in self.index_frame.items():
+            for clip_id , frame_count in clip_info.items():
+                clip_path = os.path.join(video_dir, clip_id)
+                for i in range(frame_count):
+                    self.groups_lst.append((clip_path, i))
+        random.shuffle(self.groups_lst)
+        self.groups = []
+        self.group_size = len(self.groups_lst) // self.group_num
+        for i in range(0, self.group_size * self.group_num, self.group_size):
+            group = self.groups_lst[i:i + self.group_size]
+            self.groups.append(group)
+
+    def __iter__(self):
+        #Return clip index for each batch
+        for i in range(0, self.group_size):
+            batch = []
+            for group in self.groups:
+                batch.append(group[i])
+            yield batch
+
+    def __len__(self):
+        #Return total number of batches
+        return self.group_size
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        "Benchmark StreamingClipDataset",
+        "Benchmark ClipDataset",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--dataloader-cls", type=str, default="torch", choices=["torch", "torchdata"]
+    )
+    parser.add_argument(
+        "--sampler", type=str, default="streaming", choices=["streaming", "randomaccess"]
     )
     parser.add_argument(
         "--codec",
@@ -84,8 +122,14 @@ if __name__ == "__main__":
     device_id = args.device_id
 
     construction_started_at = time.perf_counter()
-    dataset = streaming_clip_dataset.StreamingClipDataset(index_frame=index_frame, group_num=args.group_num)
-    sampler = VideoClipSampler(index_frame=index_frame, group_num=args.group_num)
+    dataset = clip_dataset.VideoClipDataset(index_frame=index_frame, group_num=args.group_num)
+    sampler = StreamingVideoClipSampler(index_frame=index_frame, group_num=args.group_num)
+    if args.sampler == "streaming":
+        sampler = StreamingVideoClipSampler(index_frame=index_frame, group_num=args.group_num)
+    elif args.sampler == "randomaccess":
+        sampler = RandomAccessVideoClipSampler(index_frame=index_frame, group_num=args.group_num)
+    else:
+        raise ValueError(f"Invalid sampler type: {args.sampler}")
 
     gpu_transforms = [
         video_transforms.DecodeVideo(device_id=device_id, codec=codec),

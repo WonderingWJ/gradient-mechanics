@@ -10,7 +10,7 @@ from gradient_mechanics.data import video_transforms
 logger = logging.getLogger(__name__)
 
 
-class StreamingClipDataset(torch.utils.data.Dataset):
+class VideoClipDataset(torch.utils.data.Dataset):
     def __init__(self, index_frame, group_num, num_cameras=7):
         """
         Initialize the VideoDataset.
@@ -23,7 +23,6 @@ class StreamingClipDataset(torch.utils.data.Dataset):
         self._index_frame = index_frame
         self._num_cameras = num_cameras
         self._group_num = group_num
-        self._cam_dict=['front_long','front_wide','rear_wide','side_left_front','side_left_rear','side_right_front','side_right_rear']
  
     def __len__(self):
         """Return the total number of episodes."""
