@@ -39,8 +39,8 @@ class IndexingDemuxer:
             PacketBuffers object containing the target frames, packet frames, and packets.
         """
 
-        if not (0 <= frame_idx < len(self)):
-            raise ValueError("frame_idx must be within the range of the video")
+        #if not (0 <= frame_idx < len(self)):
+        #    raise ValueError("frame_idx must be within the range of the video")
 
         packets = self._fetch_packets(frame_idx)
 
