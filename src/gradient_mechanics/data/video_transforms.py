@@ -5,6 +5,7 @@ import typing
 
 import numpy as np
 import PyNvVideoCodec as nvc
+import PyNvOnDemandDecoder as nvc_ondemand
 import cvcuda
 
 from gradient_mechanics.data import transforms
@@ -57,6 +58,26 @@ class PacketBuffers(typing.NamedTuple):
 
 
 collate.default_collate_fn_map[PacketBuffers] = PacketBuffers.collate
+
+class PacketOndemandBuffersBatch(typing.NamedTuple):
+    """Batch of PacketOndemandBuffers."""
+
+    samples: List["PacketOndemandBuffers"]
+
+class PacketOndemandBuffers(typing.NamedTuple):
+    gop_packets: list[torch.Tensor]
+    """List of GOP (Group of Pictures) packets. This contains packets for the GOP structure."""
+    target_frame_list: list[int]
+    """List of target frame indices."""
+
+    @classmethod
+    def collate(
+        cls, samples: List["PacketOndemandBuffers"], *, collate_fn_map=None
+    ) -> PacketOndemandBuffersBatch:
+        """"""
+        return PacketOndemandBuffersBatch(samples=samples)
+
+collate.default_collate_fn_map[PacketOndemandBuffers] = PacketOndemandBuffers.collate
 
 class Codec(enum.Enum):
     """Codec for video decoding."""
@@ -151,3 +172,41 @@ class DecodeVideo(transforms.Transform):
             )
 
         return list(target_tensor)
+
+class DecodeVideoOnDemand(transforms.Transform):
+    def __init__(self, *, codec: Codec = Codec.H264, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.register_input_type(PacketOndemandBuffersBatch)
+        self._codec = codec
+        self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
+            maxfiles = 1,
+            usedevicememory = 1,
+            iGpu = self.device_id,
+            cachedir="",
+        )
+        self.height = 1080
+        self.width = 1920
+    
+    def transform(self, batch: List[PacketOndemandBuffersBatch]) -> torch.Tensor:
+        decoded_batches = []
+        for item in batch:
+            decoded_batch = self.decode_batch(item)
+            decoded_batches.append(decoded_batch)
+        return torch.stack(decoded_batches, dim=0)
+
+    def decode_batch(self, batch: PacketOndemandBuffersBatch) -> torch.Tensor:
+        decoded_batch = []
+        for packet_buffers in batch.samples:
+            decoded = self.decode_sample(packet_buffers)
+            decoded_batch.append(decoded)
+        return torch.stack(decoded_batch, dim=0)
+
+    def decode_sample(
+        self, episode_packet_buffer: PacketOndemandBuffers
+    ) -> torch.Tensor:
+        gop_packets = episode_packet_buffer.gop_packets[0]
+        decoded_frames = self._nv_gop_dec.DecodeFromPacketRGB(gop_packets, gop_packets.filepaths, episode_packet_buffer.target_frame_list, True)
+        target_tensor = [torch.unsqueeze(torch.as_tensor(df), 0) for df in decoded_frames]
+
+        #check error
+        return torch.cat(target_tensor, dim=0)  # or torch.stack(target_tensor, dim=0) if shape is [1, ...]

@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Set
 import typing
 import cvcuda
 import numpy as np
-from nvidia import nvimgcodec
+# from nvidia import nvimgcodec
 import torch
 from torch.utils.data._utils import collate
 from torchvision import io

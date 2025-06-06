@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class VideoDataset(torch.utils.data.Dataset):
     _INDEX_EXTENSION = ".index.json"
 
-    def __init__(self, video_file_path, episode_length=1, episode_stride=1):
+    def __init__(self, video_file_path, episode_length=1, episode_stride=1, on_demand=False):
         """
         Initialize the VideoDataset.
 
@@ -29,6 +29,7 @@ class VideoDataset(torch.utils.data.Dataset):
         self._sample_index_generator = None
         self._indexing_demuxer = None
         self._is_initialized = False
+        self._is_on_demand = on_demand
 
     def _lazy_init(self):
         """Initialize the VideoDataset lazily."""
@@ -37,7 +38,11 @@ class VideoDataset(torch.utils.data.Dataset):
 
         index_file_path = self.video_file_path + self._INDEX_EXTENSION
 
-        self._indexing_demuxer = video_demuxing.IndexingDemuxer(self.video_file_path)
+        if self._is_on_demand:
+            self._indexing_demuxer = video_demuxing.IndexingDemuxerOndemand(self.video_file_path)
+        else:
+            self._indexing_demuxer = video_demuxing.IndexingDemuxer(self.video_file_path)
+        
         self._sample_index_generator = episodes.EpisodeGenerator(
             sample_count=len(self._indexing_demuxer),
             episode_length=self._episode_length,

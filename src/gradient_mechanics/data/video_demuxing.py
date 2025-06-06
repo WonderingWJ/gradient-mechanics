@@ -3,6 +3,7 @@ import os
 from typing import List, Optional
 
 import PyNvVideoCodec as nvc
+import PyNvOnDemandDecoder as nvc_ondemand
 import torch
 from gradient_mechanics.data import video_transforms
 
@@ -70,3 +71,47 @@ class IndexingDemuxer:
             packet_index_to_packet[packet_idx+seek_idx] = copied_bsl
 
         return [packet for packet in packet_index_to_packet.values()]
+
+class IndexingDemuxerOndemand:
+    def __init__(self, video_file_path: str) -> None:
+        """
+        Initialize the IndexingDemuxer.
+
+        Args:
+            video_file_path: Path to the video file to demux.
+        """
+        if not os.path.exists(video_file_path):
+            raise FileNotFoundError(f"Video file {video_file_path} does not exist")
+        self._video_file_path = video_file_path
+        self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
+            maxfiles = 1,
+            usedevicememory = 1,
+            iGpu = 0,
+            cachedir="",
+        )
+
+    def __len__(self) -> int:
+        return 605
+
+    def packet_buffers_for_frame_idx(
+        self, frame_idx: int
+    ) -> video_transforms.PacketOndemandBuffers:
+        """
+        Fetch packets and dependencies for the given frame indices.
+
+        Args:
+            frame_idx: List of frame indices to fetch packets for.
+
+        Returns:
+            PacketOndemandBuffers object containing the target frames, packet frames, and packets.
+        """
+
+        if not (0 <= frame_idx < len(self)):
+            raise ValueError("frame_idx must be within the range of the video")
+
+        gop_packets = self._nv_gop_dec.GetPackets([self._video_file_path], [frame_idx])
+
+        return video_transforms.PacketOndemandBuffers(
+            gop_packets=[gop_packets],
+            target_frame_list=[frame_idx],
+        )
