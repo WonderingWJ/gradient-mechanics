@@ -39,7 +39,7 @@ class VideoDataset(torch.utils.data.Dataset):
         index_file_path = self.video_file_path + self._INDEX_EXTENSION
 
         if self._is_on_demand:
-            self._indexing_demuxer = video_demuxing.IndexingDemuxerOndemand(self.video_file_path)
+            self._indexing_demuxer = video_demuxing.IndexingDemuxerOndemand([self.video_file_path], num_cameras=1, num_group=1)
         else:
             self._indexing_demuxer = video_demuxing.IndexingDemuxer(self.video_file_path)
         

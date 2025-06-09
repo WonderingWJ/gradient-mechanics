@@ -174,12 +174,13 @@ class DecodeVideo(transforms.Transform):
         return list(target_tensor)
 
 class DecodeVideoOnDemand(transforms.Transform):
-    def __init__(self, *, codec: Codec = Codec.H264, **kwargs) -> None:
+    def __init__(self, *, codec: Codec = Codec.H264, num_cameras: int, num_group: int, **kwargs) -> None:
         super().__init__(**kwargs)
         self.register_input_type(PacketOndemandBuffersBatch)
         self._codec = codec
         self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
-            maxfiles = 1,
+            maxfiles = num_cameras,
+            # maxfiles = num_cameras * num_group,
             usedevicememory = 1,
             iGpu = self.device_id,
             cachedir="",
@@ -205,7 +206,11 @@ class DecodeVideoOnDemand(transforms.Transform):
         self, episode_packet_buffer: PacketOndemandBuffers
     ) -> torch.Tensor:
         gop_packets = episode_packet_buffer.gop_packets[0]
-        decoded_frames = self._nv_gop_dec.DecodeFromPacketRGB(gop_packets, gop_packets.filepaths, episode_packet_buffer.target_frame_list, True)
+        try:
+            decoded_frames = self._nv_gop_dec.DecodeFromPacketRGB(gop_packets, gop_packets.filepaths, episode_packet_buffer.target_frame_list, True)
+        except Exception as e:
+            print(f"Error decoding sample: {e}")
+            exit(1)
         target_tensor = [torch.unsqueeze(torch.as_tensor(df), 0) for df in decoded_frames]
 
         #check error

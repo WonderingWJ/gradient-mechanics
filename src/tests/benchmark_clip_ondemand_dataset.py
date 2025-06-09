@@ -1,17 +1,18 @@
 import argparse
+import json
 import logging
-import time
 import os
-import torch
-import numpy as np
+import time
+import random
 from torch.nn.functional import cosine_similarity
-from torchvision.utils import save_image
+import torch
 
+from torch.utils.data import Sampler
 from gradient_mechanics.data import torch_loading, torchdata_loading
 from gradient_mechanics.data import transforms
 from gradient_mechanics.data import video_transforms
-from tests import video_dataset
-import pdb
+from tests import clip_dataset
+
 
 def compare_batches(current_batch, ref_batch):
     """
@@ -70,14 +71,85 @@ def print_comparison_metrics(metrics):
     print(f"L2 distance: {metrics['l2_distance']:.6f}")
     print(f"Cosine distance: {metrics['cosine_distance']:.6f}")
 
+
+class StreamingVideoClipSampler(Sampler):
+    def __init__(self, index_frame, group_num):
+        self.index_frame = index_frame
+        self.group_num = group_num
+        self.clip_ids = list(index_frame.keys())
+        self._generate_groups()
+
+    def _generate_groups(self):
+        """divide the clip index into groups"""
+        self.groups_lst = []
+        for video_dir ,clip_info in self.index_frame.items():
+            for clip_id , frame_count in clip_info.items():
+                clip_path = os.path.join(video_dir, clip_id)
+                for i in range(frame_count):
+                    self.groups_lst.append((clip_path, i))
+
+        self.groups = []
+        self.group_size = len(self.groups_lst) // self.group_num
+        for i in range(0, self.group_size * self.group_num, self.group_size):
+            group = self.groups_lst[i:i + self.group_size]
+            self.groups.append(group)
+
+    def __iter__(self):
+        #Return clip index for each batch
+        for i in range(0, self.group_size):
+            batch = []
+            for group in self.groups:
+                batch.append(group[i])
+            yield batch
+
+    def __len__(self):
+        #Return total number of batches
+        return self.group_size
+
+class RandomAccessVideoClipSampler(Sampler):
+    def __init__(self, index_frame, group_num):
+        self.index_frame = index_frame
+        self.group_num = group_num
+        self.clip_ids = list(index_frame.keys())
+        self._generate_groups()
+
+    def _generate_groups(self):
+        """divide the clip index into groups"""
+        self.groups_lst = []
+        for video_dir ,clip_info in self.index_frame.items():
+            for clip_id , frame_count in clip_info.items():
+                clip_path = os.path.join(video_dir, clip_id)
+                for i in range(frame_count):
+                    self.groups_lst.append((clip_path, i))
+        random.shuffle(self.groups_lst)
+        self.groups = []
+        self.group_size = len(self.groups_lst) // self.group_num
+        for i in range(0, self.group_size * self.group_num, self.group_size):
+            group = self.groups_lst[i:i + self.group_size]
+            self.groups.append(group)
+
+    def __iter__(self):
+        #Return clip index for each batch
+        for i in range(0, self.group_size):
+            batch = []
+            for group in self.groups:
+                batch.append(group[i])
+            yield batch
+
+    def __len__(self):
+        #Return total number of batches
+        return self.group_size
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        "Benchmark VideoDataset",
+        "Benchmark ClipDataset",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("video_file_path", type=str)
     parser.add_argument(
         "--dataloader-cls", type=str, default="torch", choices=["torch", "torchdata"]
+    )
+    parser.add_argument(
+        "--sampler", type=str, default="streaming", choices=["streaming", "randomaccess"]
     )
     parser.add_argument(
         "--codec",
@@ -85,49 +157,51 @@ if __name__ == "__main__":
         default="HEVC",
         choices=list(video_transforms.Codec),
     )
-    parser.add_argument("--shuffle", action="store_true")
-    parser.add_argument("--episode-length", type=int, default=1)
-    parser.add_argument("--episode-stride", type=int, default=1)
+    parser.add_argument("--index_file", type=str, help='Path to the index_frame JSON file (default: %(default)s)',default= '/data/ndas/index_frame.json')
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=2)
-    parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument("--group_num", type=int, default=4)
+    parser.add_argument("--device-id", type=int, default=0, help="GPU device ID")
     parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument("--use-check", type=int, default=0)
     args = parser.parse_args()
 
     logging.basicConfig(level=args.log_level)
 
-    video_file_path = args.video_file_path
+    # Load index_frame from JSON file
+    with open(args.index_file, 'r') as f:
+        index_frame = json.load(f)
+
     if args.dataloader_cls == "torchdata":
-        print("torchdata")
         dataloader_cls = torchdata_loading.GPUDataLoader
     elif args.dataloader_cls == "torch":
-        print("torch")
         dataloader_cls = torch_loading.GPUDataLoader
     else:
         raise ValueError(f"Invalid dataloader class: {args.dataloader_cls}")
     codec = args.codec
-    shuffle = args.shuffle
-    episode_length = args.episode_length
-    episode_stride = args.episode_stride
     batch_size = args.batch_size
     num_workers = args.num_workers
     device_id = args.device_id
 
     construction_started_at = time.perf_counter()
-    dataset = video_dataset.VideoDataset(
-        video_file_path, episode_length=episode_length, episode_stride=episode_stride, on_demand=True
-    )
+    dataset = clip_dataset.VideoClipDataset(index_frame=index_frame, group_num=args.group_num, on_demand=True)
+    sampler = StreamingVideoClipSampler(index_frame=index_frame, group_num=args.group_num)
+    if args.sampler == "streaming":
+        sampler = StreamingVideoClipSampler(index_frame=index_frame, group_num=args.group_num)
+    elif args.sampler == "randomaccess":
+        sampler = RandomAccessVideoClipSampler(index_frame=index_frame, group_num=args.group_num)
+    else:
+        raise ValueError(f"Invalid sampler type: {args.sampler}")
 
     gpu_transforms = [
-        video_transforms.DecodeVideoOnDemand(device_id=device_id, codec=codec, num_cameras=1, num_group=1),
-        # transforms.ToTensor(device_id=device_id),
+        video_transforms.DecodeVideoOnDemand(device_id=device_id, codec=codec, num_cameras=7, num_group=args.group_num),
+        transforms.ToTensor(device_id=device_id),
     ]
     loader = torch_loading.GPUDataLoader(
         dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        shuffle=shuffle,
+        sampler=sampler,
         # GPU Specific
         gpu_device=device_id,
         gpu_prefetch_factor=1,
@@ -142,8 +216,8 @@ if __name__ == "__main__":
     load_started_at = time.perf_counter()
     first_batch_received_at = None
     for i, batch in enumerate(loader):
-        # if args.use_check == 1 and i > 100:
-        #     break
+        if args.use_check == 1 and i > 100:
+            break
         load_ended_at = time.perf_counter()
         load_gaps.append(load_ended_at - load_started_at)
         if first_batch_received_at is None:
@@ -153,41 +227,40 @@ if __name__ == "__main__":
         print(f"Batch: {i} - {len(batch)} frames in {load_gaps[-1]:.4f} seconds")
         batches_loaded += 1
         
-        # Save batch data in binary format
-        # os.makedirs('./ref', exist_ok=True)
-        # torch.save(batch, f'./ref/batch_{i}.pt')
-        
-        # Load reference data and compare
         if args.use_check == 1:
-            ref_path = f'./ref_benchmark_video_dataset/batch_{i}.pt'
+            ref_path = f'./ref_benchmark_clip_dataset/batch_{i}.pt'
             if os.path.exists(ref_path):
-                ref_batch = torch.load(ref_path)
-                ref_batch = ref_batch.unsqueeze(0)  # Add dimension of size 1 at the highest dimension
-            print("ref_batch: ", ref_batch.shape)
-            print("batch: ", batch.shape)
-            batch = batch.permute(0, 1, 4, 2, 3)  # Transpose dimensions to match ref_batch shape
-            
+                ref_tensor = torch.load(ref_path)
+                # ref_batch = ref_batch.unsqueeze(0)  # Add dimension of size 1 at the highest dimension
+            print("ref_tensor: ", ref_tensor.shape)
+
+            print(batch.shape)
+            # Reshape batch from [4, 1, 7, 1080, 1920, 3] to [28, 1080, 1920, 3]
+            concatenated = batch.reshape(-1, 1080, 1920, 3)
+            print("reshaped batch: ", batch.shape)
+            # concatenated = torch.cat(batch, dim=0)
+            concatenated = concatenated.permute(0, 3, 1, 2)  # Transpose dimensions to match ref_batch shape
+            print("concatenated: ", concatenated.shape)
+
             # Save images, ignoring the highest two dimensions
-            os.makedirs('./comparison_images', exist_ok=True)
+            # os.makedirs('./comparison_images', exist_ok=True)
             # Remove the highest two dimensions (both are 1)
-            batch_img = batch.squeeze(0).squeeze(0)  # Shape: [3, 1080, 1920]
-            ref_batch_img = ref_batch.squeeze(0).squeeze(0)  # Shape: [3, 1080, 1920]
+            # batch_img = batch.squeeze(0).squeeze(0)  # Shape: [3, 1080, 1920]
+            # ref_batch_img = ref_batch.squeeze(0).squeeze(0)  # Shape: [3, 1080, 1920]
             
             # Convert to float and ensure values are in [0, 1] range
-            batch_img = batch_img.float() / 255.0
-            ref_batch_img = ref_batch_img.float() / 255.0
+            # concatenated = concatenated.float() / 255.0
+            # ref_tensor = ref_tensor.float() / 255.0
             
             # save_image(batch_img, f'./comparison_images/batch_{i}.png')
             # save_image(ref_batch_img, f'./comparison_images/ref_batch_{i}.png')
             
-            metrics = compare_batches(batch, ref_batch)
+            metrics = compare_batches(concatenated, ref_tensor)
             print_comparison_metrics(metrics)
         
         for sample in batch:
-            print("batch type:", type(batch), batch.shape)
-            print("sample type:", type(sample), sample.shape)
             samples_loaded += sample.shape[0]
-
+            print(f"Sample: {sample.shape}, len(batch): {len(batch)}")
     ended_at = time.perf_counter()
 
     throughput = samples_loaded / (ended_at - started_at)
@@ -211,4 +284,3 @@ if __name__ == "__main__":
     # print out the dataloader class and module
     print(f"Dataloader class: {dataloader_cls.__name__}")
     print(f"Dataloader module: {dataloader_cls.__module__}")
-    print(f"Shuffle: {shuffle}")

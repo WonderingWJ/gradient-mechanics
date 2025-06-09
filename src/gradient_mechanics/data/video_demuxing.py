@@ -73,18 +73,17 @@ class IndexingDemuxer:
         return [packet for packet in packet_index_to_packet.values()]
 
 class IndexingDemuxerOndemand:
-    def __init__(self, video_file_path: str) -> None:
+    def __init__(self, video_file_paths: List[str], num_cameras :int, num_group :int) -> None:
         """
         Initialize the IndexingDemuxer.
 
         Args:
             video_file_path: Path to the video file to demux.
         """
-        if not os.path.exists(video_file_path):
-            raise FileNotFoundError(f"Video file {video_file_path} does not exist")
-        self._video_file_path = video_file_path
+        self._video_file_paths = video_file_paths
         self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
-            maxfiles = 1,
+            maxfiles = num_cameras,
+            # maxfiles = camera_num * num_group,
             usedevicememory = 1,
             iGpu = 0,
             cachedir="",
@@ -109,9 +108,20 @@ class IndexingDemuxerOndemand:
         if not (0 <= frame_idx < len(self)):
             raise ValueError("frame_idx must be within the range of the video")
 
-        gop_packets = self._nv_gop_dec.GetPackets([self._video_file_path], [frame_idx])
+        try:
+            gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, [frame_idx]*len(self._video_file_paths))
+        except Exception as e:
+            logger.error(f"Error fetching packets for frame {frame_idx} with video_file_paths: {self._video_file_paths}. Error: {e}")
+            exit(1)
 
         return video_transforms.PacketOndemandBuffers(
             gop_packets=[gop_packets],
-            target_frame_list=[frame_idx],
+            target_frame_list=[frame_idx]*len(self._video_file_paths),
         )
+
+    def update_path(self, video_file_paths: List[str]):
+        for video_file_path in video_file_paths:
+            if not os.path.exists(video_file_path):
+                raise FileNotFoundError(f"Video file {video_file_path} does not exist")
+        self._video_file_paths = video_file_paths
+    
