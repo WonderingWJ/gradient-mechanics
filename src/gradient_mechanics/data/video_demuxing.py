@@ -82,12 +82,13 @@ class IndexingDemuxerOndemand:
         """
         self._video_file_paths = video_file_paths
         self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
-            maxfiles = num_cameras,
-            # maxfiles = camera_num * num_group,
+            # maxfiles = num_cameras,
+            maxfiles = num_cameras * num_group,
             usedevicememory = 1,
             iGpu = 0,
             cachedir="",
         )
+        self._packet_buffers = None
 
     def __len__(self) -> int:
         return 605
@@ -105,9 +106,6 @@ class IndexingDemuxerOndemand:
             PacketOndemandBuffers object containing the target frames, packet frames, and packets.
         """
 
-        if not (0 <= frame_idx < len(self)):
-            raise ValueError("frame_idx must be within the range of the video")
-
         try:
             gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, [frame_idx]*len(self._video_file_paths))
         except Exception as e:
@@ -117,6 +115,50 @@ class IndexingDemuxerOndemand:
         return video_transforms.PacketOndemandBuffers(
             gop_packets=[gop_packets],
             target_frame_list=[frame_idx]*len(self._video_file_paths),
+        )
+
+    def packet_buffers_for_frame_idx_list(
+        self, frame_idx_list: List[int]
+    ) -> video_transforms.PacketOndemandBuffers:
+        """
+        Fetch packets and dependencies for the given frame indices.
+
+        Args:
+            frame_idx: List of frame indices to fetch packets for.
+
+        Returns:
+            PacketOndemandBuffers object containing the target frames, packet frames, and packets.
+        """
+
+        gop_packets = None
+        use_cache = True
+
+        if self._packet_buffers is None:
+            use_cache = False
+        else:
+            for i in range(len(self._packet_buffers.filepaths)):
+                if self._packet_buffers.filepaths[i] != self._video_file_paths[i]:
+                    self._packet_buffers = self._packet_buffers
+                    use_cache = False
+                    break
+                if frame_idx_list[i] < self._packet_buffers.first_frame_ids[i] or frame_idx_list[i] >= self._packet_buffers.first_frame_ids[i] + self._packet_buffers.gop_lens[i]:
+                    use_cache = False
+                    break
+        
+        if use_cache:
+            gop_packets = self._packet_buffers
+        else:
+            print("new decode !!")
+            try:
+                gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, frame_idx_list)
+                self._packet_buffers = gop_packets
+            except Exception as e:
+                logger.error(f"Error fetching packets for frame {frame_idx_list} with video_file_paths: {self._video_file_paths}. Error: {e}")
+                exit(1)
+
+        return video_transforms.PacketOndemandBuffers(
+            gop_packets=[gop_packets],
+            target_frame_list=frame_idx_list,
         )
 
     def update_path(self, video_file_paths: List[str]):

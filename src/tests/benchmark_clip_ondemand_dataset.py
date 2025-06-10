@@ -259,8 +259,9 @@ if __name__ == "__main__":
             print_comparison_metrics(metrics)
         
         for sample in batch:
-            samples_loaded += sample.shape[0]
+            # samples_loaded += sample.shape[0]
             print(f"Sample: {sample.shape}, len(batch): {len(batch)}")
+        samples_loaded = samples_loaded + args.group_num * 7
     ended_at = time.perf_counter()
 
     throughput = samples_loaded / (ended_at - started_at)

@@ -179,8 +179,8 @@ class DecodeVideoOnDemand(transforms.Transform):
         self.register_input_type(PacketOndemandBuffersBatch)
         self._codec = codec
         self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
-            maxfiles = num_cameras,
-            # maxfiles = num_cameras * num_group,
+            # maxfiles = num_cameras,
+            maxfiles = num_cameras * num_group,
             usedevicememory = 1,
             iGpu = self.device_id,
             cachedir="",
