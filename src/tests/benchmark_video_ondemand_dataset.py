@@ -142,8 +142,8 @@ if __name__ == "__main__":
     load_started_at = time.perf_counter()
     first_batch_received_at = None
     for i, batch in enumerate(loader):
-        # if args.use_check == 1 and i > 100:
-        #     break
+        if args.use_check == 1 and i > 100:
+            break
         load_ended_at = time.perf_counter()
         load_gaps.append(load_ended_at - load_started_at)
         if first_batch_received_at is None:

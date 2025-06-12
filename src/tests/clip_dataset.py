@@ -24,12 +24,22 @@ class VideoClipDataset(torch.utils.data.Dataset):
         self._num_cameras = num_cameras
         self._group_num = group_num
         self._on_demand = on_demand
+        self._is_initialized = False
         self._indexing_demuxer = None
+
+    def _lazy_init(self):
+        """Initialize the VideoDataset lazily."""
+        if self._is_initialized:
+            return
+
         if self._on_demand:
-            self._indexing_demuxer = video_demuxing.IndexingDemuxerOndemand([""]*num_cameras, num_cameras, group_num)
-        
+            self._indexing_demuxer = video_demuxing.IndexingDemuxerOndemand([""]*self._num_cameras, self._num_cameras, self._group_num)
+
+        self._is_initialized = True
+
     def __len__(self):
         """Return the total number of episodes."""
+        self._lazy_init()
         frame_count = 0
         for video_dir ,clip_info in self.index_frame.items():
             for clip_id , frame_count in clip_info.items():
@@ -40,27 +50,15 @@ class VideoClipDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index: int) -> List[video_transforms.PacketBuffers]:
         """Return the episode at the given index."""
-
+        self._lazy_init()
         episode_buffers = []
         if self._on_demand:
-            file_paths = []
-            frame_idxs = []
-            for clip_info in index:
+            for i, clip_info in enumerate(index):
                 clip_path = clip_info[0]
                 video_paths = [os.path.join(clip_path,f) for f in os.listdir(clip_path) if f.endswith('.mp4')]
-                file_paths = file_paths + video_paths
-                frame_idxs = frame_idxs + [clip_info[1]]*len(video_paths)
-                # print(f"clip_info: {clip_info}")
-                # print(f"file_paths: {file_paths}")
-                # print(f"frame_idxs: {frame_idxs}")
-            self._indexing_demuxer.update_path(file_paths)
-            episode_buffers = self._indexing_demuxer.packet_buffers_for_frame_idx_list(frame_idxs)
-            # for clip_info in index:
-            #     clip_path = clip_info[0]
-            #     video_paths = [os.path.join(clip_path,f) for f in os.listdir(clip_path) if f.endswith('.mp4')]
-            #     frame_idx = clip_info[1]
-            #     self._indexing_demuxer.update_path(video_paths)
-            #     episode_buffers.append(self._indexing_demuxer.packet_buffers_for_frame_idx(frame_idx))
+                frame_idx = clip_info[1]
+                self._indexing_demuxer.update_path(video_paths)
+                episode_buffers.append(self._indexing_demuxer.packet_buffers_for_frame_idx_list([frame_idx]*len(video_paths), group_idx=i))
         else:
             for clip_info in index:
                 clip_path = clip_info[0]

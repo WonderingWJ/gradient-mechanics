@@ -6,6 +6,7 @@ import time
 import random
 from torch.nn.functional import cosine_similarity
 import torch
+import torch.cuda.nvtx as nvtx
 
 from torch.utils.data import Sampler
 from gradient_mechanics.data import torch_loading, torchdata_loading
@@ -215,29 +216,41 @@ if __name__ == "__main__":
 
     load_started_at = time.perf_counter()
     first_batch_received_at = None
-    for i, batch in enumerate(loader):
-        if args.use_check == 1 and i > 100:
+    i = 0
+    
+    # Create iterator once
+    loader_iter = iter(loader)
+    
+    while True:
+        # if i > 40:
+        #     break
+        nvtx.range_push(f"batch_{i}")
+        
+        nvtx.range_push("next_batch")
+        try:
+            batch = next(loader_iter)
+        except StopIteration:
             break
+        nvtx.range_pop()
+            
+        nvtx.range_push("load_batch")
         load_ended_at = time.perf_counter()
         load_gaps.append(load_ended_at - load_started_at)
         if first_batch_received_at is None:
             first_batch_received_at = load_ended_at
-
         load_started_at = time.perf_counter()
+        
         print(f"Batch: {i} - {len(batch)} frames in {load_gaps[-1]:.4f} seconds")
         batches_loaded += 1
         
         if args.use_check == 1:
+            nvtx.range_push("check_batch")
             ref_path = f'./ref_benchmark_clip_dataset/batch_{i}.pt'
             if os.path.exists(ref_path):
                 ref_tensor = torch.load(ref_path)
                 # ref_batch = ref_batch.unsqueeze(0)  # Add dimension of size 1 at the highest dimension
-            print("ref_tensor: ", ref_tensor.shape)
-
-            print(batch.shape)
             # Reshape batch from [4, 1, 7, 1080, 1920, 3] to [28, 1080, 1920, 3]
             concatenated = batch.reshape(-1, 1080, 1920, 3)
-            print("reshaped batch: ", batch.shape)
             # concatenated = torch.cat(batch, dim=0)
             concatenated = concatenated.permute(0, 3, 1, 2)  # Transpose dimensions to match ref_batch shape
             print("concatenated: ", concatenated.shape)
@@ -257,11 +270,17 @@ if __name__ == "__main__":
             
             metrics = compare_batches(concatenated, ref_tensor)
             print_comparison_metrics(metrics)
+            nvtx.range_pop()
         
         for sample in batch:
             # samples_loaded += sample.shape[0]
             print(f"Sample: {sample.shape}, len(batch): {len(batch)}")
         samples_loaded = samples_loaded + args.group_num * 7
+
+        nvtx.range_pop() # next_batch
+        nvtx.range_pop() # batch_{i}
+
+        i += 1
     ended_at = time.perf_counter()
 
     throughput = samples_loaded / (ended_at - started_at)

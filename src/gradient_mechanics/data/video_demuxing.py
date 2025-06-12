@@ -6,6 +6,7 @@ import PyNvVideoCodec as nvc
 import PyNvOnDemandDecoder as nvc_ondemand
 import torch
 from gradient_mechanics.data import video_transforms
+import torch.cuda.nvtx as nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -80,18 +81,36 @@ class IndexingDemuxerOndemand:
         Args:
             video_file_path: Path to the video file to demux.
         """
+        print(f"IndexingDemuxerOndemand init !")
+        self._num_group = num_group
+        self._num_cameras = num_cameras
         self._video_file_paths = video_file_paths
         self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
-            # maxfiles = num_cameras,
-            maxfiles = num_cameras * num_group,
+            maxfiles = num_cameras,
             usedevicememory = 1,
             iGpu = 0,
-            cachedir="",
         )
-        self._packet_buffers = None
+        self._packet_buffers = [None] * num_group
 
     def __len__(self) -> int:
         return 605
+
+    def check_use_cache(self, frame_idx_list: List[int], group_idx: int) -> bool:
+        use_cache = True
+
+        if self._packet_buffers[group_idx] is None:
+            use_cache = False
+        else:
+            for i in range(len(self._packet_buffers[group_idx].filepaths)):
+                if self._packet_buffers[group_idx].filepaths[i] != self._video_file_paths[i]:
+                    print("diff path!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                    use_cache = False
+                    break
+                if frame_idx_list[i] < self._packet_buffers[group_idx].first_frame_ids[i] or frame_idx_list[i] >= self._packet_buffers[group_idx].first_frame_ids[i] + self._packet_buffers[group_idx].gop_lens[i]:
+                    use_cache = False
+                    break
+        
+        return use_cache
 
     def packet_buffers_for_frame_idx(
         self, frame_idx: int
@@ -100,25 +119,36 @@ class IndexingDemuxerOndemand:
         Fetch packets and dependencies for the given frame indices.
 
         Args:
-            frame_idx: List of frame indices to fetch packets for.
+            frame_idx: frame indice to fetch packets for.
 
         Returns:
             PacketOndemandBuffers object containing the target frames, packet frames, and packets.
         """
 
-        try:
-            gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, [frame_idx]*len(self._video_file_paths))
-        except Exception as e:
-            logger.error(f"Error fetching packets for frame {frame_idx} with video_file_paths: {self._video_file_paths}. Error: {e}")
-            exit(1)
+        gop_packets = None
+        result_gop_packets = []
 
+        use_cache = self.check_use_cache([frame_idx], 0)
+
+        if use_cache == False:
+            try:
+                gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, [frame_idx]*len(self._video_file_paths))
+                self._packet_buffers[0] = gop_packets
+            except Exception as e:
+                logger.error(f"Error fetching packets for frame {frame_idx} with video_file_paths: {self._video_file_paths}. Error: {e}")
+                exit(1)
+            
+            result_gop_packets = [gop_packets]
+        
         return video_transforms.PacketOndemandBuffers(
-            gop_packets=[gop_packets],
+            gop_packets=result_gop_packets,
             target_frame_list=[frame_idx]*len(self._video_file_paths),
+            use_cache=use_cache,
+            group_idx=0,
         )
 
     def packet_buffers_for_frame_idx_list(
-        self, frame_idx_list: List[int]
+        self, frame_idx_list: List[int], group_idx: int = 0
     ) -> video_transforms.PacketOndemandBuffers:
         """
         Fetch packets and dependencies for the given frame indices.
@@ -129,37 +159,49 @@ class IndexingDemuxerOndemand:
         Returns:
             PacketOndemandBuffers object containing the target frames, packet frames, and packets.
         """
+        nvtx.range_push("packet_buffers_for_frame_idx_list")
+
+        if group_idx >= self._num_group:
+            raise ValueError(f"Group index {group_idx} is out of range. The number of groups is {self._num_group}")
 
         gop_packets = None
-        use_cache = True
+        result_gop_packets = []
 
-        if self._packet_buffers is None:
-            use_cache = False
-        else:
-            for i in range(len(self._packet_buffers.filepaths)):
-                if self._packet_buffers.filepaths[i] != self._video_file_paths[i]:
-                    self._packet_buffers = self._packet_buffers
-                    use_cache = False
-                    break
-                if frame_idx_list[i] < self._packet_buffers.first_frame_ids[i] or frame_idx_list[i] >= self._packet_buffers.first_frame_ids[i] + self._packet_buffers.gop_lens[i]:
-                    use_cache = False
-                    break
+        use_cache = self.check_use_cache(frame_idx_list, group_idx)
+
+        if use_cache == False:
+            print(f"use_cache: {use_cache}, group_idx: {group_idx}")
+            if (self._packet_buffers[group_idx] is None):
+                print(f"cached: {None}")
+            else:
+                print(f"cached: {self._packet_buffers[group_idx].first_frame_ids}")
+            print(f"frame_idx_list: {frame_idx_list}")
+
         
-        if use_cache:
-            gop_packets = self._packet_buffers
-        else:
-            print("new decode !!")
+        if use_cache == False:
             try:
                 gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, frame_idx_list)
-                self._packet_buffers = gop_packets
+                self._packet_buffers[group_idx] = gop_packets
             except Exception as e:
                 logger.error(f"Error fetching packets for frame {frame_idx_list} with video_file_paths: {self._video_file_paths}. Error: {e}")
                 exit(1)
+            
+            result_gop_packets = [gop_packets]
 
-        return video_transforms.PacketOndemandBuffers(
-            gop_packets=[gop_packets],
+            # 'packet_binary_data': gop_packets.packet_binary_data,
+            # 'packet_binary_data': convert_innermost_to_tensor(gop_packets.packet_binary_data),
+
+            # print(type(gop_packets.packet_binary_data[0][0][0]))
+
+        result = video_transforms.PacketOndemandBuffers(
+            # gop_packets=[packet_data],
+            gop_packets=result_gop_packets,
             target_frame_list=frame_idx_list,
+            use_cache=use_cache,
+            group_idx=group_idx,
         )
+        nvtx.range_pop()  # packet_buffers_for_frame_idx_list
+        return result
 
     def update_path(self, video_file_paths: List[str]):
         for video_file_path in video_file_paths:
@@ -167,3 +209,20 @@ class IndexingDemuxerOndemand:
                 raise FileNotFoundError(f"Video file {video_file_path} does not exist")
         self._video_file_paths = video_file_paths
     
+def convert_innermost_to_tensor(nested_list):
+    """
+    只将三维嵌套列表的最内层转换为tensor
+    保持外层list结构不变
+    """
+    result = []
+    for group in nested_list:
+        group_result = []
+        for sublist in group:
+            # 只转换最内层的list为tensor
+            if isinstance(sublist, list):
+                tensor_sublist = torch.tensor(sublist, dtype=torch.int32)
+                group_result.append(tensor_sublist)
+            else:
+                group_result.append(sublist)
+        result.append(group_result)
+    return result

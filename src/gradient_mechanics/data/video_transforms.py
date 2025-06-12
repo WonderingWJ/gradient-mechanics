@@ -12,6 +12,7 @@ from gradient_mechanics.data import transforms
 
 import torch
 from torch.utils.data._utils import collate
+import torch.cuda.nvtx as nvtx
 
 def packet_from_buffer(buffer: torch.ByteTensor) -> nvc.PacketData:
     packet = nvc.PacketData()
@@ -69,7 +70,8 @@ class PacketOndemandBuffers(typing.NamedTuple):
     """List of GOP (Group of Pictures) packets. This contains packets for the GOP structure."""
     target_frame_list: list[int]
     """List of target frame indices."""
-
+    use_cache: bool
+    group_idx: int
     @classmethod
     def collate(
         cls, samples: List["PacketOndemandBuffers"], *, collate_fn_map=None
@@ -175,18 +177,18 @@ class DecodeVideo(transforms.Transform):
 
 class DecodeVideoOnDemand(transforms.Transform):
     def __init__(self, *, codec: Codec = Codec.H264, num_cameras: int, num_group: int, **kwargs) -> None:
+        print(f"DecodeVideoOnDemand init !")
         super().__init__(**kwargs)
         self.register_input_type(PacketOndemandBuffersBatch)
         self._codec = codec
         self._nv_gop_dec = nvc_ondemand.CreateGopDecoder(
-            # maxfiles = num_cameras,
-            maxfiles = num_cameras * num_group,
+            maxfiles = num_cameras,
             usedevicememory = 1,
             iGpu = self.device_id,
-            cachedir="",
         )
         self.height = 1080
         self.width = 1920
+        self._cached_packet_data = [None] * num_group
     
     def transform(self, batch: List[PacketOndemandBuffersBatch]) -> torch.Tensor:
         decoded_batches = []
@@ -205,13 +207,50 @@ class DecodeVideoOnDemand(transforms.Transform):
     def decode_sample(
         self, episode_packet_buffer: PacketOndemandBuffers
     ) -> torch.Tensor:
-        gop_packets = episode_packet_buffer.gop_packets[0]
+        nvtx.range_push("decode_sample")
+
+        use_cache = episode_packet_buffer.use_cache
+        group_idx = episode_packet_buffer.group_idx
+
+        if use_cache:
+            gop_packets = self._cached_packet_data[group_idx]
+        else:
+            nvtx.range_push("load_packets")
+            # gop_packets.packet_binary_data = restore_to_lists(packet_data['packet_binary_data'])
+
+            gop_packets = episode_packet_buffer.gop_packets[0]
+            print(gop_packets.packet_binary_data)
+
+            self._cached_packet_data[group_idx] = gop_packets
+            nvtx.range_pop()
         try:
-            decoded_frames = self._nv_gop_dec.DecodeFromPacketRGB(gop_packets, gop_packets.filepaths, episode_packet_buffer.target_frame_list, True)
+            decoded_frames = self._nv_gop_dec.DecodeFromPacketRGB(
+                gop_packets,
+                gop_packets.filepaths,
+                episode_packet_buffer.target_frame_list,
+                True
+            )
         except Exception as e:
-            print(f"Error decoding sample: {e}")
-            exit(1)
+            print(f"Error decoding packets: {e}")
+            exit(1) 
+
         target_tensor = [torch.unsqueeze(torch.as_tensor(df), 0) for df in decoded_frames]
 
-        #check error
-        return torch.cat(target_tensor, dim=0)  # or torch.stack(target_tensor, dim=0) if shape is [1, ...]
+        res = torch.cat(target_tensor, dim=0)  # or torch.stack(target_tensor, dim=0) if shape is [1, ...]
+        nvtx.range_pop()
+        return res
+
+def restore_to_lists(mixed_data):
+    """
+    将混合结构恢复为完全的list格式
+    """
+    result = []
+    for group in mixed_data:
+        group_result = []
+        for item in group:
+            if isinstance(item, torch.Tensor):
+                group_result.append(item.tolist())
+            else:
+                group_result.append(item)
+        result.append(group_result)
+    return result
