@@ -132,7 +132,7 @@ class IndexingDemuxerOndemand:
 
         if use_cache == False:
             try:
-                gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, [frame_idx]*len(self._video_file_paths))
+                gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, [frame_idx]*len(self._video_file_paths), False)
                 self._packet_buffers[0] = gop_packets
             except Exception as e:
                 logger.error(f"Error fetching packets for frame {frame_idx} with video_file_paths: {self._video_file_paths}. Error: {e}")
@@ -165,7 +165,7 @@ class IndexingDemuxerOndemand:
             raise ValueError(f"Group index {group_idx} is out of range. The number of groups is {self._num_group}")
 
         gop_packets = None
-        result_gop_packets = []
+        tensors = None
 
         use_cache = self.check_use_cache(frame_idx_list, group_idx)
 
@@ -180,24 +180,19 @@ class IndexingDemuxerOndemand:
         
         if use_cache == False:
             try:
-                gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, frame_idx_list)
+                gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, frame_idx_list, False)
                 self._packet_buffers[group_idx] = gop_packets
             except Exception as e:
                 logger.error(f"Error fetching packets for frame {frame_idx_list} with video_file_paths: {self._video_file_paths}. Error: {e}")
                 exit(1)
             
-            result_gop_packets = [gop_packets]
-
-            # 'packet_binary_data': gop_packets.packet_binary_data,
-            # 'packet_binary_data': convert_innermost_to_tensor(gop_packets.packet_binary_data),
-
-            # print(type(gop_packets.packet_binary_data[0][0][0]))
+            tensors = convert_lists_to_tensors(gop_packets.packet_binary_data)
 
         result = video_transforms.PacketOndemandBuffers(
-            # gop_packets=[packet_data],
-            gop_packets=result_gop_packets,
+            gop_packets=gop_packets,
             target_frame_list=frame_idx_list,
             use_cache=use_cache,
+            tensors=tensors,
             group_idx=group_idx,
         )
         nvtx.range_pop()  # packet_buffers_for_frame_idx_list
@@ -209,20 +204,9 @@ class IndexingDemuxerOndemand:
                 raise FileNotFoundError(f"Video file {video_file_path} does not exist")
         self._video_file_paths = video_file_paths
     
-def convert_innermost_to_tensor(nested_list):
-    """
-    只将三维嵌套列表的最内层转换为tensor
-    保持外层list结构不变
-    """
+def convert_lists_to_tensors(src_list):
     result = []
-    for group in nested_list:
-        group_result = []
-        for sublist in group:
-            # 只转换最内层的list为tensor
-            if isinstance(sublist, list):
-                tensor_sublist = torch.tensor(sublist, dtype=torch.int32)
-                group_result.append(tensor_sublist)
-            else:
-                group_result.append(sublist)
-        result.append(group_result)
+    for src in src_list:
+        tensor = torch.tensor(src, dtype=torch.uint8)
+        result.append(tensor)
     return result

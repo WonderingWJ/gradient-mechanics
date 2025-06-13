@@ -72,6 +72,9 @@ class PacketOndemandBuffers(typing.NamedTuple):
     """List of target frame indices."""
     use_cache: bool
     group_idx: int
+    tensors: list[torch.Tensor]
+    """List of tensors. This contains tensors for the target frames and any frames the target frames depend on."""
+
     @classmethod
     def collate(
         cls, samples: List["PacketOndemandBuffers"], *, collate_fn_map=None
@@ -216,10 +219,9 @@ class DecodeVideoOnDemand(transforms.Transform):
             gop_packets = self._cached_packet_data[group_idx]
         else:
             nvtx.range_push("load_packets")
-            # gop_packets.packet_binary_data = restore_to_lists(packet_data['packet_binary_data'])
 
-            gop_packets = episode_packet_buffer.gop_packets[0]
-            print(gop_packets.packet_binary_data)
+            gop_packets = episode_packet_buffer.gop_packets
+            gop_packets.packet_binary_data = tensors_to_lists(episode_packet_buffer.tensors)
 
             self._cached_packet_data[group_idx] = gop_packets
             nvtx.range_pop()
@@ -240,17 +242,8 @@ class DecodeVideoOnDemand(transforms.Transform):
         nvtx.range_pop()
         return res
 
-def restore_to_lists(mixed_data):
-    """
-    将混合结构恢复为完全的list格式
-    """
-    result = []
-    for group in mixed_data:
-        group_result = []
-        for item in group:
-            if isinstance(item, torch.Tensor):
-                group_result.append(item.tolist())
-            else:
-                group_result.append(item)
-        result.append(group_result)
-    return result
+def tensors_to_lists(src_tensors):
+    dst_list = []
+    for src in src_tensors:
+        dst_list.append(src.tolist())
+    return dst_list
