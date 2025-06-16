@@ -7,6 +7,7 @@ import random
 from torch.nn.functional import cosine_similarity
 import torch
 import torch.cuda.nvtx as nvtx
+from torchvision.utils import save_image
 
 from torch.utils.data import Sampler
 from gradient_mechanics.data import torch_loading, torchdata_loading
@@ -248,26 +249,24 @@ if __name__ == "__main__":
             ref_path = f'./ref_benchmark_clip_dataset/batch_{i}.pt'
             if os.path.exists(ref_path):
                 ref_tensor = torch.load(ref_path)
-                # ref_batch = ref_batch.unsqueeze(0)  # Add dimension of size 1 at the highest dimension
             # Reshape batch from [4, 1, 7, 1080, 1920, 3] to [28, 1080, 1920, 3]
             concatenated = batch.reshape(-1, 1080, 1920, 3)
             # concatenated = torch.cat(batch, dim=0)
             concatenated = concatenated.permute(0, 3, 1, 2)  # Transpose dimensions to match ref_batch shape
             print("concatenated: ", concatenated.shape)
 
-            # Save images, ignoring the highest two dimensions
-            # os.makedirs('./comparison_images', exist_ok=True)
-            # Remove the highest two dimensions (both are 1)
-            # batch_img = batch.squeeze(0).squeeze(0)  # Shape: [3, 1080, 1920]
-            # ref_batch_img = ref_batch.squeeze(0).squeeze(0)  # Shape: [3, 1080, 1920]
-            
-            # Convert to float and ensure values are in [0, 1] range
-            # concatenated = concatenated.float() / 255.0
-            # ref_tensor = ref_tensor.float() / 255.0
-            
-            # save_image(batch_img, f'./comparison_images/batch_{i}.png')
-            # save_image(ref_batch_img, f'./comparison_images/ref_batch_{i}.png')
-            
+            if save_images:
+                # Save images, ignoring the highest two dimensions
+                os.makedirs('./comparison_images', exist_ok=True)
+                # Remove the highest two dimensions (both are 1)
+                batch_img = concatenated.squeeze(0)  # Shape: [3, 1080, 1920]
+                ref_batch_img = ref_tensor.squeeze(0)  # Shape: [3, 1080, 1920]
+                print("batch_img: ", batch_img.shape)
+                print("ref_batch_img: ", ref_batch_img.shape)
+                
+                save_image(batch_img[0]/255, f'./comparison_images/batch_{i}.png')
+                save_image(ref_batch_img[0]/255, f'./comparison_images/ref_batch_{i}.png')
+                
             metrics = compare_batches(concatenated, ref_tensor)
             print_comparison_metrics(metrics)
             nvtx.range_pop()

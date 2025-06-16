@@ -223,6 +223,8 @@ class DecodeVideoOnDemand(transforms.Transform):
             gop_packets = episode_packet_buffer.gop_packets
             gop_packets.packet_binary_data = tensors_to_lists(episode_packet_buffer.tensors)
 
+            if self._cached_packet_data[group_idx] is not None:
+                self._cached_packet_data[group_idx].release()
             self._cached_packet_data[group_idx] = gop_packets
             nvtx.range_pop()
         try:
@@ -230,7 +232,7 @@ class DecodeVideoOnDemand(transforms.Transform):
                 gop_packets,
                 gop_packets.filepaths,
                 episode_packet_buffer.target_frame_list,
-                True
+                False # RGB
             )
         except Exception as e:
             print(f"Error decoding packets: {e}")

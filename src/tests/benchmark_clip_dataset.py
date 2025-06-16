@@ -155,10 +155,7 @@ if __name__ == "__main__":
     load_started_at = time.perf_counter()
     first_batch_received_at = None
     
-    # Create ref directory if it doesn't exist
-    # ref_dir = "ref_benchmark_clip_dataset"
-    # os.makedirs(ref_dir, exist_ok=True)
-    
+
     for i, batch in enumerate(loader):
         load_ended_at = time.perf_counter()
         load_gaps.append(load_ended_at - load_started_at)
@@ -170,11 +167,14 @@ if __name__ == "__main__":
         batches_loaded += 1
         
         # # Concatenate samples along dimension 1
-        # concatenated = torch.cat(batch, dim=0)
-        # # Save the concatenated tensor
-        # print(f"concatenated: {concatenated.shape}")
-        # torch.save(concatenated, os.path.join(ref_dir, f"batch_{i}.pt"))
-        
+        if (save_images):
+            ref_dir = "ref_benchmark_clip_dataset"
+            os.makedirs(ref_dir, exist_ok=True)
+            concatenated = torch.cat(batch, dim=0)
+            # Save the concatenated tensor
+            print(f"concatenated: {concatenated.shape}")
+            torch.save(concatenated, os.path.join(ref_dir, f"batch_{i}.pt"))
+            
         for sample in batch:
             samples_loaded += sample.shape[0]
 
