@@ -180,13 +180,17 @@ class IndexingDemuxerOndemand:
         
         if use_cache == False:
             try:
+                nvtx.range_push("get_packets")
                 gop_packets = self._nv_gop_dec.GetPackets(self._video_file_paths, frame_idx_list, False)
                 self._packet_buffers[group_idx] = gop_packets
+                nvtx.range_pop() # get_packets
             except Exception as e:
                 logger.error(f"Error fetching packets for frame {frame_idx_list} with video_file_paths: {self._video_file_paths}. Error: {e}")
                 exit(1)
             
-            tensors = convert_lists_to_tensors(gop_packets.packet_binary_data)
+            # tensors = convert_lists_to_tensors(gop_packets.packet_binary_data)
+            # tensors = convert_numpys_to_tensors(gop_packets.get_binary_datas())
+            tensors = gop_packets.get_binary_datas()
 
         result = video_transforms.PacketOndemandBuffers(
             gop_packets=gop_packets,
@@ -207,6 +211,17 @@ class IndexingDemuxerOndemand:
 def convert_lists_to_tensors(src_list):
     result = []
     for src in src_list:
+        nvtx.range_push("convert_lists_to_tensors")
         tensor = torch.tensor(src, dtype=torch.uint8)
         result.append(tensor)
+        nvtx.range_pop() # convert_lists_to_tensors
+    return result
+
+def convert_numpys_to_tensors(src_list):
+    result = []
+    for src in src_list:
+        nvtx.range_push("convert_lists_to_tensors")
+        tensor = torch.from_numpy(src)
+        result.append(tensor)
+        nvtx.range_pop() # convert_lists_to_tensors
     return result

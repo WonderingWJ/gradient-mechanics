@@ -212,21 +212,31 @@ class DecodeVideoOnDemand(transforms.Transform):
     ) -> torch.Tensor:
         nvtx.range_push("decode_sample")
 
+        nvtx.range_push("load_packets")
         use_cache = episode_packet_buffer.use_cache
         group_idx = episode_packet_buffer.group_idx
 
         if use_cache:
             gop_packets = self._cached_packet_data[group_idx]
         else:
-            nvtx.range_push("load_packets")
 
             gop_packets = episode_packet_buffer.gop_packets
-            gop_packets.packet_binary_data = tensors_to_lists(episode_packet_buffer.tensors)
+            
+            nvtx.range_push("get_tensors")
+            tensors = episode_packet_buffer.tensors
+            nvtx.range_pop() # get_tensors
+            
+            nvtx.range_push("tensors_to_lists")
+            # gop_packets.packet_binary_data = tensors_to_lists(tensors)
+            gop_packets.update_binary_datas_from_numpys(tensors)
+            nvtx.range_pop() # tensors_to_lists
 
             if self._cached_packet_data[group_idx] is not None:
                 self._cached_packet_data[group_idx].release()
             self._cached_packet_data[group_idx] = gop_packets
-            nvtx.range_pop()
+        nvtx.range_pop() # load_packets
+        
+        nvtx.range_push("decode_frames")
         try:
             decoded_frames = self._nv_gop_dec.DecodeFromPacketRGB(
                 gop_packets,
@@ -237,11 +247,15 @@ class DecodeVideoOnDemand(transforms.Transform):
         except Exception as e:
             print(f"Error decoding packets: {e}")
             exit(1) 
+        nvtx.range_pop() # decode_frames
 
+        nvtx.range_push("convert_to_tensor")
         target_tensor = [torch.unsqueeze(torch.as_tensor(df), 0) for df in decoded_frames]
 
         res = torch.cat(target_tensor, dim=0)  # or torch.stack(target_tensor, dim=0) if shape is [1, ...]
-        nvtx.range_pop()
+        nvtx.range_pop() # convert_to_tensor
+
+        nvtx.range_pop() # decode_sample
         return res
 
 def tensors_to_lists(src_tensors):

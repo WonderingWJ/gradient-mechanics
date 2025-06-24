@@ -166,6 +166,7 @@ if __name__ == "__main__":
     parser.add_argument("--device-id", type=int, default=0, help="GPU device ID")
     parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument("--use-check", type=int, default=0)
+    parser.add_argument("--save-images", type=int, default=0)
     args = parser.parse_args()
 
     logging.basicConfig(level=args.log_level)
@@ -255,7 +256,7 @@ if __name__ == "__main__":
             concatenated = concatenated.permute(0, 3, 1, 2)  # Transpose dimensions to match ref_batch shape
             print("concatenated: ", concatenated.shape)
 
-            if save_images:
+            if args.save_images:
                 # Save images, ignoring the highest two dimensions
                 os.makedirs('./comparison_images', exist_ok=True)
                 # Remove the highest two dimensions (both are 1)
@@ -276,7 +277,7 @@ if __name__ == "__main__":
             print(f"Sample: {sample.shape}, len(batch): {len(batch)}")
         samples_loaded = samples_loaded + args.group_num * 7
 
-        nvtx.range_pop() # next_batch
+        nvtx.range_pop() # load_batch
         nvtx.range_pop() # batch_{i}
 
         i += 1
